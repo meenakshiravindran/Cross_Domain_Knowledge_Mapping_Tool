@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "password": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+    "name": "Admin User",
+    "role": "admin",
+    "created": "2025-11-24T12:01:35.499666",
+    "saved_graphs": [],
+    "preferences": {}
+  },
+  "demo": {
+    "password": "d3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791",
+    "name": "Demo User",
+    "role": "user",
+    "created": "2025-11-24T12:01:35.499666",
+    "saved_graphs": [],
+    "preferences": {}
+  },
+  "meenakshi": {
+    "password": "ef797c8118f02dfb649607dd5d3f8c7623048c9c063d532cc95c5ed7a898a64f",
+    "name": "meenakhi",
+    "role": "user",
+    "created": "2025-11-24T12:09:15.517431",
+    "saved_graphs": [],
+    "preferences": {}
+  }
+}
