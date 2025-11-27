@@ -28,6 +28,7 @@ from modules.nlp_pipeline import extract_entities_from_data, extract_relations_f
 from modules.graph_builder import build_knowledge_graph, get_graph_stats, visualize_graph, search_subgraph
 from modules.cache import cache
 from modules.semantic_search import SemanticSearch
+from modules.graph_builder import search_subgraph, visualize_graph
 
 # ---------------------------
 # Data & persistence paths
@@ -495,37 +496,89 @@ with tab2:
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------------------------
 # Tab 3: NLP Pipeline
-# ---------------------------
 with tab3:
-    st.markdown('<div class="card"><h3>🧠 NLP Pipeline</h3>', unsafe_allow_html=True)
-    if not df_ok(st.session_state.data):
-        st.warning("Upload a dataset first in Dataset tab")
+    st.markdown('<p class="sub-header">🧠 NLP Processing Pipeline</p>', unsafe_allow_html=True)
+    
+    if st.session_state.data is None:
+        st.warning("⚠️ Please upload a dataset first in the Upload Data tab!")
     else:
-        left, right = st.columns(2)
-        with left:
-            st.subheader("Entity Extraction")
-            if st.button("Run Entity Extraction"):
-                with st.spinner("Extracting entities..."):
-                    ents = extract_entities_from_data(st.session_state.data)
-                    st.session_state.entities_data = ents
-                    save_entities(ents)
-                    st.success(f"Entities extracted ({len(ents)} rows).")
-            if df_ok(st.session_state.entities_data):
-                st.dataframe(st.session_state.entities_data.head(20), use_container_width=True)
-
-        with right:
-            st.subheader("Relation Extraction")
-            if st.button("Run Relation Extraction"):
-                with st.spinner("Extracting relations..."):
-                    triples = extract_relations_from_data(st.session_state.data)
-                    st.session_state.triples_data = triples
-                    save_triples(triples)
-                    st.success(f"Relations extracted ({len(triples)} records).")
-            if df_ok(st.session_state.triples_data):
-                st.dataframe(st.session_state.triples_data.head(20), use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🏷️ Entity Extraction")
+            st.markdown("Extract named entities (persons, organizations, locations, etc.) from your text.")
+            
+            if st.button("🚀 Run Entity Extraction", type="primary", use_container_width=True):
+                with st.spinner("Extracting entities... This may take a while."):
+                    entities_data = extract_entities_from_data(st.session_state.data)
+                    st.session_state.entities_data = entities_data
+                    st.success(f"✅ Extracted entities from {len(entities_data)} records!")
+            
+            if st.session_state.entities_data is not None:
+                st.markdown("##### 📊 Entity Statistics")
+                # Flatten entities for analysis
+                all_entities = []
+                for entities_list in st.session_state.entities_data['entities']:
+                    all_entities.extend(entities_list)
+                
+                if all_entities:
+                    entity_df = pd.DataFrame(all_entities, columns=['Entity', 'Type'])
+                    entity_counts = entity_df['Type'].value_counts()
+                    
+                    st.bar_chart(entity_counts)
+                    
+                    st.markdown("##### 🔝 Top Entities by Type")
+                    for entity_type in entity_counts.head(5).index:
+                        top_entities = entity_df[entity_df['Type'] == entity_type]['Entity'].value_counts().head(5)
+                        with st.expander(f"{entity_type} ({entity_counts[entity_type]} total)"):
+                            st.write(top_entities)
+        
+        with col2:
+            st.markdown("#### 🔗 Relation Extraction")
+            st.markdown("Extract subject-relation-object triples from your text.")
+            
+            if st.button("🚀 Run Relation Extraction", type="primary", use_container_width=True):
+                with st.spinner("Extracting relations... This may take a while."):
+                    triples_data = extract_relations_from_data(st.session_state.data)
+                    st.session_state.triples_data = triples_data
+                    st.success(f"✅ Extracted {len(triples_data)} triples!")
+            
+            if st.session_state.triples_data is not None:
+                st.markdown("##### 📊 Relation Statistics")
+                
+                relation_counts = st.session_state.triples_data['Relation'].value_counts()
+                st.bar_chart(relation_counts.head(10))
+                
+                st.markdown("##### 🔝 Top Relations")
+                st.write(relation_counts.head(10))
+        
+        # Display extracted data
+        if st.session_state.entities_data is not None or st.session_state.triples_data is not None:
+            st.markdown("---")
+            st.markdown("#### 📋 Extracted Data Preview")
+            
+            tab_ent, tab_rel = st.tabs(["Entities", "Relations"])
+            
+            with tab_ent:
+                if st.session_state.entities_data is not None:
+                    st.dataframe(st.session_state.entities_data.head(20), use_container_width=True)
+                    st.download_button(
+                        "⬇️ Download Entities CSV",
+                        st.session_state.entities_data.to_csv(index=False),
+                        "entities_extracted.csv",
+                        "text/csv"
+                    )
+            
+            with tab_rel:
+                if st.session_state.triples_data is not None:
+                    st.dataframe(st.session_state.triples_data.head(20), use_container_width=True)
+                    st.download_button(
+                        "⬇️ Download Triples CSV",
+                        st.session_state.triples_data.to_csv(index=False),
+                        "extracted_triples.csv",
+                        "text/csv"
+                    )
 
 # ---------------------------
 # Tab 4: Knowledge Graph
@@ -570,54 +623,165 @@ with tab4:
 
 # ---------------------------
 # Tab 5: Semantic Search
-# ---------------------------
 # Semantic Search Tab
 with tab5:
-    st.markdown('<div class="card"><h3>🔍 Semantic Search & Subgraph Extraction</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">🔍 Semantic Search & Subgraph Extraction</p>', unsafe_allow_html=True)
+    
+    # Initialize session state
+    if 'search_results' not in st.session_state:
+        st.session_state.search_results = None
+    
     if not any([st.session_state.data is not None, st.session_state.triples_data is not None, st.session_state.entities_data is not None]):
-        st.warning("Please upload data or run the NLP pipeline first")
+        st.warning("⚠️ Please upload data or run the NLP pipeline first")
     else:
-        col_l, col_r = st.columns([3,1])
-        with col_l:
-            query = st.text_input("Search query (e.g., 'quantum computing')")
-            top_k = st.slider("Top K", 1, 10, 5)
-            if st.button("Search"):
-                ss = st.session_state.get("semantic_engine", None)
-                if ss is None:
-                    ss = SemanticSearch()
-                    # build index best-effort
-                    df_texts = st.session_state.data if st.session_state.data is not None else None
-                    df_triples = st.session_state.triples_data if st.session_state.triples_data is not None else None
-                    entities_list = None
-                    if st.session_state.entities_data is not None:
-                        entities_list = SemanticSearch.extract_entities_from_session(st.session_state.entities_data)
-                    ss.build_index(df_texts=df_texts, df_triples=df_triples, entities_list=entities_list)
-                    st.session_state.semantic_engine = ss
-                results = ss.search(query, top_k=top_k)
-                if not results:
-                    st.warning("No matches")
-                else:
-                    st.success(f"Found {len(results)}")
-                    for res in results:
-                        st.markdown(f"**{res['rank']}.** Score: {res['score']:.3f}")
-                        st.write(res['text'])
+        # Search Section
+        st.markdown("#### 🔎 Search the Knowledge")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            query = st.text_input("Search query (e.g., 'quantum computing', 'India', 'technology')", key="search_query")
+        
+        with col2:
+            top_k = st.slider("Top Results", 1, 10, 5, key="top_k_slider")
+        
+        col_btn1, col_btn2 = st.columns([1, 4])
+        with col_btn1:
+            search_clicked = st.button("🔍 Search", type="primary", use_container_width=True)
+        with col_btn2:
+            if st.button("🗑️ Clear Results", use_container_width=True):
+                st.session_state.search_results = None
+                st.rerun()
+        
+        # Perform search
+        if search_clicked and query:
+            try:
+                with st.spinner("Searching..."):
+                    ss = st.session_state.get("semantic_engine", None)
+                    if ss is None:
+                        from modules.semantic_search import SemanticSearch
+                        ss = SemanticSearch()
+                        
+                        df_texts = st.session_state.data if st.session_state.data is not None else None
+                        df_triples = st.session_state.triples_data if st.session_state.triples_data is not None else None
+                        entities_list = None
+                        if st.session_state.entities_data is not None:
+                            entities_list = SemanticSearch.extract_entities_from_session(st.session_state.entities_data)
+                        
+                        ss.build_index(df_texts=df_texts, df_triples=df_triples, entities_list=entities_list)
+                        st.session_state.semantic_engine = ss
+                    
+                    results = ss.search(query, top_k=top_k)
+                    st.session_state.search_results = results
+                    
+            except Exception as e:
+                st.error(f"❌ Search error: {str(e)}")
+        
+        # Display search results
+        if st.session_state.search_results:
+            results = st.session_state.search_results
+            
+            if not results:
+                st.warning("No matches found")
+            else:
+                st.success(f"✅ Found {len(results)} results")
+                st.markdown("---")
+                
+                # Create tabs for each result with subgraph
+                result_tabs = st.tabs([f"Result {i+1}" for i in range(len(results))])
+                
+                for idx, (tab, res) in enumerate(zip(result_tabs, results)):
+                    with tab:
+                        # Display result info
+                        st.markdown(f"### Result {res['rank']}")
+                        st.metric("Similarity Score", f"{res['score']:.3f}")
+                        
                         meta = res.get('meta', {})
-                        st.caption(f"Type: {meta.get('type')} | Source: {meta.get('source')}")
-                        if meta.get('type') == 'entity' and st.button(f"Show subgraph for {meta.get('entity')}", key=f"sg_{res['rank']}"):
-                            sub = search_subgraph(st.session_state.graph, meta.get('entity'), depth=2)
-                            if sub.number_of_nodes() > 0:
-                                try:
-                                    html = visualize_graph(sub, height="500px")
-                                    st.components.v1.html(html, height=520, scrolling=True)
-                                except Exception:
-                                    st.info("Could not render subgraph preview")
-        with col_r:
-            st.markdown("Index Controls")
-            if st.button("Rebuild Index"):
+                        
+                        col_info1, col_info2 = st.columns(2)
+                        with col_info1:
+                            st.write("**Type:**", meta.get('type', 'unknown'))
+                        with col_info2:
+                            st.write("**Source:**", meta.get('source', 'unknown'))
+                        
+                        st.markdown("#### 📄 Content")
+                        text_display = res['text']
+                        if len(text_display) > 500:
+                            text_display = text_display[:500] + "..."
+                        st.info(text_display)
+                        
+                        # Determine entity to search
+                        search_entity = None
+                        if meta.get('type') == 'entity':
+                            search_entity = meta.get('entity')
+                        elif meta.get('type') == 'triple':
+                            search_entity = meta.get('subject')
+                        
+                        # Show subgraph section
+                        if search_entity:
+                            st.markdown("---")
+                            st.markdown("#### 🌐 Knowledge Graph Context")
+                            
+                            # Use checkbox instead of button
+                            show_graph = st.checkbox(
+                                f"Show subgraph for: **{search_entity}**", 
+                                key=f"show_graph_{idx}_{hash(search_entity)}"
+                            )
+                            
+                            if show_graph:
+                                if st.session_state.graph is None:
+                                    st.error("⚠️ Please build the knowledge graph first (go to Tab 4: Knowledge Graph)")
+                                else:
+                                    try:
+                                        with st.spinner(f"Loading subgraph for {search_entity}..."):
+                                            from modules.graph_builder import search_subgraph, visualize_graph
+                                            
+                                            # Generate subgraph
+                                            sub = search_subgraph(st.session_state.graph, search_entity, depth=2)
+                                            
+                                            if sub.number_of_nodes() > 0:
+                                                # Show metrics
+                                                col_m1, col_m2, col_m3 = st.columns(3)
+                                                with col_m1:
+                                                    st.metric("Nodes", sub.number_of_nodes())
+                                                with col_m2:
+                                                    st.metric("Edges", sub.number_of_edges())
+                                                with col_m3:
+                                                    st.metric("Search Depth", 2)
+                                                
+                                                # Show nodes list
+                                                with st.expander("📋 View all connected nodes"):
+                                                    nodes_list = list(sub.nodes())
+                                                    for i, node in enumerate(nodes_list, 1):
+                                                        st.write(f"{i}. {node}")
+                                                
+                                                # Visualize
+                                                st.markdown("##### 🎨 Interactive Visualization")
+                                                try:
+                                                    html = visualize_graph(sub, height="500px")
+                                                    st.components.v1.html(html, height=520, scrolling=True)
+                                                except Exception as viz_err:
+                                                    st.error(f"Visualization failed: {str(viz_err)}")
+                                            else:
+                                                st.warning(f"No graph connections found for '{search_entity}'")
+                                                st.info("This entity may not be connected to other entities in your knowledge graph.")
+                                    
+                                    except Exception as e:
+                                        st.error(f"Error: {str(e)}")
+        
+        # Index controls in sidebar
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("#### 🔧 Semantic Search Controls")
+        
+        if st.session_state.get("semantic_engine") is not None:
+            st.sidebar.success("✅ Index Ready")
+            if st.sidebar.button("🔄 Rebuild Index"):
                 st.session_state.semantic_engine = None
-                st.success("Cleared index; next search will rebuild")
-    st.markdown('</div>', unsafe_allow_html=True)
-
+                st.session_state.search_results = None
+                st.sidebar.success("Index cleared!")
+                st.rerun()
+        else:
+            st.sidebar.info("⏳ Index will be built on first search")
 # ---------------------------
 # Tab 6: Admin
 # ---------------------------
