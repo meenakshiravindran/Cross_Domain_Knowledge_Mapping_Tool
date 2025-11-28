@@ -34,9 +34,10 @@ from modules.graph_builder import search_subgraph, visualize_graph
 # ---------------------------
 # Data & persistence paths
 # ---------------------------
-ROOT = Path(__file__).parent
-DATA_DIR = ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# Use Render-safe writable directory (ephemeral)
+DATA_DIR = Path("/tmp/ai_knowmap_data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 
 USERS_FILE = DATA_DIR / "users.json"
 GRAPHS_FILE = DATA_DIR / "saved_graphs.json"
