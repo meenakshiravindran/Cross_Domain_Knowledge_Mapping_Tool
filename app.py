@@ -34,6 +34,8 @@ from modules.graph_builder import search_subgraph, visualize_graph
 # ---------------------------
 # Data & persistence paths
 # ---------------------------
+# Root of the app — used for static assets (read-only)
+ROOT = Path(__file__).parent
 # Use Render-safe writable directory (ephemeral)
 DATA_DIR = Path("/tmp/ai_knowmap_data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
