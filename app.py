@@ -31,6 +31,7 @@ from modules.cache import cache
 from modules.semantic_search import SemanticSearch
 from modules.graph_builder import search_subgraph, visualize_graph
 
+
 # ---------------------------
 # Data & persistence paths
 # ---------------------------
@@ -203,6 +204,49 @@ def load_graph_from_file(name: str):
         return None
     return nx.readwrite.json_graph.node_link_graph(graphs[name])
 
+# === SAFE LOADER FOR ENTITIES (fixes KeyError forever) ===
+def safe_load_entities():
+    if df_ok(st.session_state.entities_data):
+        # If it's already a proper DataFrame with 'entity' column → good
+        if 'entity' in st.session_state.entities_data.columns:
+            return st.session_state.entities_data
+        # If it's a list of dicts (from saved graph) → convert
+        elif isinstance(st.session_state.entities_data, list):
+            df = pd.DataFrame(st.session_state.entities_data)
+            if not df.empty and 'entity' in df.columns:
+                st.session_state.entities_data = df
+                return df
+        # Fallback: try to extract from any column that looks like entities
+        for col in st.session_state.entities_data.columns:
+            if 'entit' in col.lower():
+                return st.session_state.entities_data
+    return pd.DataFrame(columns=["entity"])  # empty safe version
+
+
+def get_document_chat_answer(question: str):
+    if not df_ok(st.session_state.data):
+        return "No documents loaded yet. Please upload a dataset first."
+
+    question_lower = question.lower()
+    answer = "Based on your uploaded documents and extracted knowledge:\n\n"
+    found = 0
+
+    if df_ok(st.session_state.triples_data):
+        relevant = st.session_state.triples_data[
+            st.session_state.triples_data.apply(
+                lambda row: any(word in " ".join(row.astype(str)).lower() for word in question_lower.split()),
+                axis=1
+            )
+        ]
+        if not relevant.empty:
+            for _, row in relevant.head(10).iterrows():
+                answer += f"• {row['Subject']} → {row['Relation']} → {row['Object']}\n"
+                found += 1
+
+    if found > 0:
+        return answer + f"\n\n(Found {found} matching facts)"
+    else:
+        return "I couldn't find specific information matching your question in the current dataset. Try running the full NLP pipeline first or ask a more specific question."
 # ---------------------------
 # Streamlit page config + CSS
 # ---------------------------
@@ -707,22 +751,6 @@ with st.sidebar:
     st.write("• Triples:", "✅" if df_ok(st.session_state.triples_data) else "⏳")
     st.write("• Graph:", "✅" if st.session_state.graph is not None else "⏳")
 
-    st.markdown("---")
-    st.markdown("#### Saved Graphs")
-
-    saved_graphs = list((read_json(GRAPHS_FILE) or {}).keys())
-    sel = st.selectbox("Open saved graph", ["-- none --"] + saved_graphs)
-    if sel and sel != "-- none --":
-        g = load_graph_from_file(sel)
-        if g is not None:
-            st.session_state.graph = g
-            st.success(f"Loaded graph: {sel}")
-
-    st.markdown("---")
-    st.markdown("Developer Controls")
-    if st.button("Rebuild Semantic Index"):
-        st.session_state.semantic_engine = None
-        st.success("Index cleared; will rebuild on next search")
 
 # ---------------------------
 # Main tabs (A+B mix styling)
@@ -732,76 +760,326 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🌐 Knowledge Graph", "🔍 Semantic Search",
     "🛠 Admin"
 ])
-
-# ---------------------------
-# Tab 1: Home (mix of screenshot + dashboard cards)
+# ---------------------------  
+# Tab 1: PROFESSIONAL HOME + SMART PROGRESSIVE UI + CHAT ON RIGHT
 # ---------------------------
 with tab1:
-    st.markdown('<div class="main-header">AI-KnowMap — Interdisciplinary Knowledge Mapping</div>', unsafe_allow_html=True)
-    left, right = st.columns([3,1])
+    st.markdown('<div class="main-header">AI-KnowMap — Your Knowledge, Connected</div>', unsafe_allow_html=True)
 
-    # Left: big centered preview (Option A)
-    with left:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("Project Preview")
-        # Use the uploaded screenshot path (one of the screenshots you uploaded)
-        preview_paths = [
-            ROOT / "Screenshot 2025-11-24 120049.png",
-        ]
-        shown = False
-        for p in preview_paths:
-            if p.exists():
-                st.image(str(p), caption="UI Preview", use_container_width=True)
-                shown = True
-                break
-        if not shown:
-            st.info("Preview image not found. Put your screenshot in the project root or assets folder.")
+    # === HERO WELCOME ===
+    user_name = st.session_state.user_data.get('name', st.session_state.username).split()[0]
+    current_hour = datetime.now().hour
+    greeting = "Good morning" if current_hour < 12 else "Good afternoon" if current_hour < 18 else "Good evening"
+    
+    st.markdown(f"""
+    <div style="text-align:center; padding: 2rem; background: rgba(91,46,225,0.12); border-radius: 18px; 
+                backdrop-filter: blur(12px); border: 1px solid rgba(91,46,225,0.2); margin: 1.5rem 0;">
+        <h2 style="margin:0; background: linear-gradient(90deg, #5b2ee1, #3b82f6); -webkit-background-clip: text; 
+                   -webkit-text-fill-color: transparent;">
+            {greeting}, {user_name}! 👋
+        </h2>
+        <p style="font-size:1.1rem; color:#555; margin:0.5rem 0;">
+            Turn unstructured text into powerful, explorable knowledge networks.
+        </p>
+        <div style="display:flex; justify-content:center; gap:1.5rem; margin-top:1rem; flex-wrap:wrap;">
+            <div style="text-align:center;">
+                <div style="font-size:1.8rem; font-weight:bold; color:#5b2ee1;">{len(st.session_state.data) if df_ok(st.session_state.data) else 0}</div>
+                <div style="font-size:0.85rem; color:#666;">Records</div>
+            </div>
+            <div style="text-align:center;">
+                <div style="font-size:1.8rem; font-weight:bold; color:#3b82f6;">{len(st.session_state.entities_data) if df_ok(st.session_state.entities_data) else 0}</div>
+                <div style="font-size:0.85rem; color:#666;">Entities</div>
+            </div>
+            <div style="text-align:center;">
+                <div style="font-size:1.8rem; font-weight:bold; color:#8b5cf6;">{st.session_state.graph.number_of_nodes() if st.session_state.graph else 0}</div>
+                <div style="font-size:0.85rem; color:#666;">Graph Nodes</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        st.markdown("### Quick Actions")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Load Demo Dataset", key="home_demo_btn"):
-                demo = pd.DataFrame({
-                    "title": ["Climate Change", "AI Healthcare", "Quantum Breakthrough"],
-                    "body": ["Climate text", "AI text", "Quantum text"]
+    # Import random once (fixes NameError)
+    import random
+
+    # Define tips
+    tips = [
+        "💡 Drag nodes in the graph to explore connections!",
+        "🔍 Ask questions like: 'What companies work on quantum computing?'",
+        "✏️ Use Admin → Graph Editor to merge duplicate entities",
+        "📊 Export your graph as interactive HTML or high-res PNG",
+        "💾 Your progress is saved automatically"
+    ]
+
+    # Check progress
+    has_data = df_ok(st.session_state.data)
+    has_entities = df_ok(st.session_state.entities_data)
+    has_triples = df_ok(st.session_state.triples_data)
+    has_graph = st.session_state.graph is not None and st.session_state.graph.number_of_nodes() > 0
+
+    # === TWO COLUMNS: Dashboard + Chat ===
+    col_main, col_chat = st.columns([2.8, 1.2], gap="large")
+
+    with col_main:
+        # If nothing done yet → clean welcome
+        if not (has_data or has_entities or has_triples or st.session_state.graph):
+            st.markdown("#### 🚀 Get Started in Seconds")
+            st.info("You're all set! Start by loading a dataset or trying the demo below.")
+            
+            # Show some helpful cards
+            st.markdown("#### 🎯 What can AI-KnowMap do?")
+            feat1, feat2, feat3 = st.columns(3)
+            with feat1:
+                st.markdown("""
+                <div class="small-card" style="padding:1.5rem;">
+                    <div style="font-size:2.5rem; margin-bottom:0.5rem;">📚</div>
+                    <strong>Extract Knowledge</strong><br>
+                    <small style="color:#666;">Automatically identify entities and relationships from your documents</small>
+                </div>
+                """, unsafe_allow_html=True)
+            with feat2:
+                st.markdown("""
+                <div class="small-card" style="padding:1.5rem;">
+                    <div style="font-size:2.5rem; margin-bottom:0.5rem;">🕸️</div>
+                    <strong>Visualize Connections</strong><br>
+                    <small style="color:#666;">See how concepts relate in interactive network graphs</small>
+                </div>
+                """, unsafe_allow_html=True)
+            with feat3:
+                st.markdown("""
+                <div class="small-card" style="padding:1.5rem;">
+                    <div style="font-size:2.5rem; margin-bottom:0.5rem;">🔎</div>
+                    <strong>Search Semantically</strong><br>
+                    <small style="color:#666;">Find relevant information based on meaning, not just keywords</small>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        else:
+            # Show progress metrics
+            st.markdown("#### 📊 Current Project Overview")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Records", len(st.session_state.data) if has_data else 0)
+            c2.metric("Entities", len(st.session_state.entities_data) if has_entities else 0)
+            c3.metric("Triples", len(st.session_state.triples_data) if has_triples else 0)
+            c4.metric("Graph Nodes", st.session_state.graph.number_of_nodes() if st.session_state.graph else 0)
+
+            if st.session_state.graph and st.session_state.graph.number_of_nodes() > 0:
+                st.markdown("#### 🌐 Live Knowledge Graph Preview")
+                preview_html = visualize_graph(st.session_state.graph, height="420px", physics=True)
+                st.components.v1.html(preview_html, height=450, scrolling=False)
+
+        # === PROGRESSIVE NEXT STEPS ===
+        st.markdown("#### 🎯 Next Steps for You")
+
+        if not has_data:
+            st.markdown("""
+            <div class="small-card" style="text-align:center; padding:1.8rem;">
+                <div style="font-size:3rem; margin-bottom:0.5rem;">📤</div>
+                <strong>Upload or load a dataset</strong><br>
+                <small style="color:#666;">Go to Dataset tab to get started</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        elif not has_entities:
+            st.markdown("""
+            <div class="small-card" style="text-align:center; padding:1.8rem;">
+                <div style="font-size:3rem; margin-bottom:0.5rem;">🏷️</div>
+                <strong>Run Entity Extraction</strong><br>
+                <small style="color:#666;">Go to NLP Pipeline to extract entities</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        elif not has_triples:
+            st.markdown("""
+            <div class="small-card" style="text-align:center; padding:1.8rem;">
+                <div style="font-size:3rem; margin-bottom:0.5rem;">🔗</div>
+                <strong>Run Relation Extraction</strong><br>
+                <small style="color:#666;">Go to NLP Pipeline to find relationships</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        elif not st.session_state.graph or st.session_state.graph.number_of_nodes() == 0:
+            st.markdown("""
+            <div class="small-card" style="text-align:center; padding:1.8rem;">
+                <div style="font-size:3rem; margin-bottom:0.5rem;">🌍</div>
+                <strong>Build your Knowledge Graph</strong><br>
+                <small style="color:#666;">Go to Knowledge Graph tab to visualize</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        else:
+            st.success("✅ **Completed!** Your knowledge graph is ready to explore")
+
+                # === QUICK ACTIONS — ALWAYS VISIBLE FROM START & 100% WORKING ===
+        st.markdown("#### Quick Actions")
+        qa1, qa2, qa3 = st.columns(3)
+
+        with qa1:
+            if st.button("Load Demo Dataset", use_container_width=True, type="secondary"):
+                demo_df = pd.DataFrame({
+                    "title": ["Climate Change Impact", "AI in Healthcare", "Quantum Breakthrough", "Renewable Energy", "Space Exploration"],
+                    "body": [
+                        "Climate change is accelerating due to human activity and requires immediate policy action...",
+                        "Artificial intelligence is transforming diagnostics and personalized medicine at unprecedented speed...",
+                        "MIT researchers achieved stable quantum entanglement at room temperature...",
+                        "Solar panel efficiency reached 47% in new perovskite-silicon tandem cells...",
+                        "NASA's Artemis program aims to return humans to the Moon by 2026..."
+                    ]
                 })
-                st.session_state.data = demo
-                st.success("Demo dataset loaded")
-        with c2:
-            if st.button("Run Entity Extraction (demo)"):
-                if df_ok(st.session_state.data):
-                    ents = extract_entities_from_data(st.session_state.data)
-                    st.session_state.entities_data = ents
-                    save_entities(ents)
-                    st.success("Entities extracted (demo)")
-                else:
-                    st.warning("No dataset loaded")
-        with c3:
-            if st.button("Build Graph (demo)"):
-                if df_ok(st.session_state.triples_data):
-                    g = build_knowledge_graph(st.session_state.triples_data, max_nodes=100)
-                    st.session_state.graph = g
-                    st.success("Graph built (demo)")
-                else:
-                    st.warning("No triples available")
+                st.session_state.data = demo_df
+                st.success("Demo dataset loaded successfully!")
+                st.rerun()
 
-        st.markdown('</div>', unsafe_allow_html=True)
+        with qa2:
+            if st.button("Run Full Demo Pipeline", use_container_width=True, type="primary"):
+                with st.spinner("Running full demo pipeline... This takes ~15–25 seconds"):
+                    try:
+                        # 1. Load demo data if missing
+                        if not df_ok(st.session_state.data):
+                            demo_df = pd.DataFrame({
+                                "title": [
+                                    "Climate Change Impact 2025", "AI Revolution in Healthcare", 
+                                    "Quantum Computing Breakthrough", "Renewable Energy Surge", 
+                                    "NASA Artemis Program", "CRISPR Gene Editing Advances"
+                                ],
+                                "body": [
+                                    "Global temperatures rise 1.5°C by 2030. Carbon markets expand rapidly. China leads in solar...",
+                                    "AI diagnostics now outperform radiologists in 94% of cases. Google DeepMind launches AlphaDiagnose...",
+                                    "IBM achieves 1000-qubit processor with 99.9% fidelity. Commercial quantum advantage expected 2027...",
+                                    "Perovskite-silicon solar cells reach 48% efficiency. India becomes world leader in solar exports...",
+                                    "Artemis III will land first woman and person of color on Moon in 2026. Lunar gateway station operational...",
+                                    "CRISPR-Cas13 used to cure genetic blindness in clinical trials. FDA fast-tracks approval..."
+                                ]
+                            })
+                            st.session_state.data = demo_df
 
-    # Right: feature cards and stats (Option B)
-    with right:
-        st.markdown('<div class="small-card">', unsafe_allow_html=True)
-        st.markdown("#### Highlights")
-        st.write("• JWT-based secure login")
-        st.write("• Multi-source dataset support")
-        st.write("• NER & Relation Extraction")
-        st.write("• Interactive KG + Semantic Search")
-        st.markdown("</div>", unsafe_allow_html=True)
+                        # 2. Extract entities
+                        if not df_ok(st.session_state.entities_data):
+                            ents = extract_entities_from_data(st.session_state.data)
+                            st.session_state.entities_data = ents
+                            save_entities(ents)
 
-        st.markdown('<div style="height:12px;"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="small-card">', unsafe_allow_html=True)
-        st.markdown("#### Stats")
-        st.metric("Graphs saved", len(read_json(GRAPHS_FILE) or {}))
-        st.markdown("</div>", unsafe_allow_html=True)
+                        # 3. Extract relations
+                        if not df_ok(st.session_state.triples_data):
+                            trips = extract_relations_from_data(st.session_state.data)
+                            st.session_state.triples_data = trips
+                            save_triples(trips)
+
+                        # 4. Build graph
+                        if st.session_state.graph is None or st.session_state.graph.number_of_nodes() == 0:
+                            g = build_knowledge_graph(st.session_state.triples_data, max_nodes=200)
+                            st.session_state.graph = g
+
+                        st.success("Full demo pipeline completed! Your 3D graph is ready")
+                        add_log("INFO", "Full demo pipeline executed from Home")
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error("Something went wrong during pipeline")
+                        st.code(str(e))
+
+        with qa3:
+            if st.button("Start Fresh Project", use_container_width=True):
+                keys_to_clear = [
+                    "data", "entities_data", "triples_data", "graph",
+                    "semantic_engine", "has_done_semantic_search"
+                ]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.success("All cleared! New project started.")
+                add_log("INFO", "User started fresh project")
+                st.rerun()
+
+                    # === RECENT ACTIVITY — BACK TO ORIGINAL CLEAN POSITION (below Quick Actions) ===
+        st.markdown("#### Recent Activity")
+        
+        logs = read_json(LOGS_FILE) or []
+        recent = [l for l in logs[-6:] if "logged in" not in l.get("message", "").lower()]
+        
+        if recent:
+            for log in reversed(recent):
+                ts = log["timestamp"].split("T")[0].split("-")[1:]  # MM-DD
+                ts = "/".join(ts)
+                msg = log["message"]
+                st.markdown(f"**{ts}** • {msg}")
+        else:
+            st.caption("No recent activity yet — start building your graph!")
+
+        # === PRO TIP (back to bottom) ===
+        import random
+        tips = [
+            "Drag nodes in the graph to explore connections!",
+            "Use Admin → Graph Editor to merge duplicate entities",
+            "Try the 3D view — hold Shift + drag to pan!",
+            "Export your graph as interactive HTML anytime",
+            "Your progress is saved automatically"
+        ]
+
+        # Pro Tip at bottom
+        st.markdown(f"**💡 Pro Tip:** {random.choice(tips)}")
+
+    # ========================================
+    # RIGHT SIDE: BEAUTIFUL CHAT PANEL
+    # ========================================
+    with col_chat:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #5b2ee1, #3b82f6); color:white; padding:1.3rem; 
+                    border-radius:16px; text-align:center; margin-bottom:1rem; box-shadow:0 10px 30px rgba(91,46,225,0.4);">
+            <h3 style="margin:0; font-size:1.4rem;">💬 Knowledge Assistant</h3>
+            <p style="margin:4px 0 0; font-size:0.9rem; opacity:0.9;">Ask questions about your data</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Chat history
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # Reduced height from 400 to 300
+        chat_area = st.container(height=300)
+        with chat_area:
+            if not st.session_state.messages:
+                st.markdown("""
+                <div style="text-align:center; padding:2rem 1rem; color:#888;">
+                    <div style="font-size:3rem; margin-bottom:0.5rem;">💭</div>
+                    <p style="font-size:0.9rem; margin:0;">Start a conversation!</p>
+                    <p style="font-size:0.8rem; color:#aaa; margin-top:0.5rem;">Try asking:<br>"What entities are in my data?"</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                for msg in st.session_state.messages:
+                    if msg["role"] == "user":
+                        st.markdown(f"""
+                        <div style="background:#e0f2fe; padding:0.7rem; border-radius:10px; margin:0.5rem 0;">
+                            <small style='color:#0c4a6e'><b>You:</b> {msg['content']}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background:#f3f4f6; padding:0.7rem; border-radius:10px; margin:0.5rem 0;">
+                            <small style='color:#1f2937'><b>🤖 AI:</b> {msg['content']}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+        # Input
+        if prompt := st.chat_input("Ask anything about your data...", key="home_chat"):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+
+            with st.spinner("🤔 Thinking..."):
+                answer = get_document_chat_answer(prompt)
+
+                if st.session_state.graph:
+                    nodes = [w.strip(".,!?\"'") for w in prompt.split() if w.strip(".,!?\"'") in st.session_state.graph.nodes()]
+                    if nodes:
+                        answer += f"\n\n🔗 Related nodes: **{', '.join(nodes[:5])}**"
+
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+
+            st.rerun()
+
+        if st.button("🗑️ Clear Chat", use_container_width=True, type="secondary"):
+            st.session_state.messages = []
+            st.rerun()
+
 
 # ---------------------------
 # Tab 2: Dataset
@@ -894,7 +1172,7 @@ with tab3:
             st.markdown("Extract subject-relation-object triples from your text.")
             
             if st.button("🚀 Run Relation Extraction", type="primary", use_container_width=True):
-                with st.spinner("Extracting relations... This may take a while."):
+                with st.spinner("Ext    racting relations... This may take a while."):
                     triples_data = extract_relations_from_data(st.session_state.data)
                     st.session_state.triples_data = triples_data
                     st.success(f"✅ Extracted {len(triples_data)} triples!")
@@ -935,62 +1213,118 @@ with tab3:
                         "text/csv"
                     )
 
-# ---------------------------
-# Tab 4: Knowledge Graph
-# ---------------------------
+# ==================== TAB 4: KNOWLEDGE GRAPH (BEST OF BOTH WORLDS) ====================
 with tab4:
-    st.markdown('<div class="card"><h3>🌐 Knowledge Graph</h3>', unsafe_allow_html=True)
+    st.markdown("#### Interactive Knowledge Graph")
+
+    # === Prerequisites Check ===
+    if not df_ok(st.session_state.data):
+        st.warning("Please upload a dataset first in the **Dataset** tab.")
+        st.info("→ Go to **Dataset** tab → Upload or click **Load Demo Dataset**")
+        st.stop()
+
+    if not df_ok(st.session_state.entities_data):
+        st.warning("Entities not extracted yet!")
+        st.info("→ Go to **NLP Pipeline** tab → Click **Extract Entities** first")
+        st.stop()
+
     if not df_ok(st.session_state.triples_data):
-        st.warning("Run relation extraction in the NLP Pipeline tab first.")
+        st.warning("Relations not extracted yet!")
+        st.info("→ Go to **NLP Pipeline** tab → Click **Extract Relations**")
+        st.stop()
+
+    # =================================================================
+    # ONE CLEAN COLUMN: Everything centered and beautiful
+    # =================================================================
+    if st.session_state.get("graph") is None:
+        # ——— NO GRAPH YET: Show big build button ———
+        st.info("Your triples are ready! Click below to build your knowledge universe")
+        col_btn, col_slider = st.columns([2, 1])
+        with col_btn:
+            if st.button("Build & Visualize Knowledge Graph", type="primary", use_container_width=True):
+                with col_slider:
+                    max_nodes = st.slider("Max Nodes", 10, 1000, 300, key="temp_max_nodes")
+                with st.spinner("Building your knowledge graph..."):
+                    G = build_knowledge_graph(st.session_state.triples_data, max_nodes=max_nodes)
+                    st.session_state.graph = G
+                    st.success(f"Graph built! {G.number_of_nodes()} nodes • {G.number_of_edges()} edges")
+                    add_log("INFO", "Knowledge graph built from tab")
+                    st.rerun()
     else:
-        colL, colR = st.columns([3,1])
-        with colR:
-            max_nodes = st.slider("Max Nodes", 10, 500, 100)
-            if st.button("Build Knowledge Graph"):
-                with st.spinner("Building graph..."):
-                    g = build_knowledge_graph(st.session_state.triples_data, max_nodes=max_nodes)
-                    st.session_state.graph = g
-                    add_log("INFO", f"Graph built with {g.number_of_nodes()} nodes")
-                    st.success("Graph built successfully")
-            if st.session_state.graph is not None:
-                stats = get_graph_stats(st.session_state.graph)
-                st.metric("Nodes", stats['nodes'])
-                st.metric("Edges", stats['edges'])
-                st.metric("Density", f"{stats['density']:.4f}")
+        # ——— GRAPH EXISTS: Show everything beautifully ———
+        view_mode = st.radio(
+            "View Mode", 
+            ["2D", "3D"], 
+            horizontal=True, 
+            index=0 if st.session_state.get("last_view_mode", "2D") == "2D" else 1,
+            key="kg_view_mode"
+        )
+        st.session_state.last_view_mode = view_mode  # remember choice
 
-        with colL:
-            if st.session_state.graph is not None:
-                st.subheader("Interactive Graph")
-                try:
-                    html_graph = visualize_graph(st.session_state.graph, height="650px")
-                    st.components.v1.html(html_graph, height=670, scrolling=True)
-                except Exception:
-                    # fallback to pyvis render to file
-                    net = Network(height="650px", width="100%", bgcolor="#ffffff")
-                    for n, d in st.session_state.graph.nodes(data=True):
-                        net.add_node(n, label=str(n))
-                    for u, v, d in st.session_state.graph.edges(data=True):
-                        net.add_edge(u, v)
-                    tmpfile = DATA_DIR / "temp_graph.html"
-                    net.save_graph(str(tmpfile))
-                    st.components.v1.html(tmpfile.read_text(), height=670, scrolling=True)
+        with st.spinner(f"Rendering in {view_mode} mode..."):
+            html = visualize_graph(
+                graph=st.session_state.graph,
+                height="720px",
+                physics=(view_mode == "2D"),
+                three_d=(view_mode == "3D"),
+                auto_cluster=True,
+                node_size_multiplier=9,
+                font_size=14
+            )
+            st.components.v1.html(html, height=760, scrolling=True)
 
-        if st.session_state.graph is not None:
-            name = st.text_input("Save graph name", value="my_graph")
+        # Caption
+        if view_mode == "2D":
+            st.caption("Drag nodes • Double-click to fix position • Auto-clustered")
+        else:
+            st.success("3D Mode Active → Rotate • Zoom • Hold Shift + Drag to pan")
 
-            if st.button("💾 Save Graph Data"):
-                save_graph_to_file(st.session_state.graph, name)
-                st.success("Graph structure saved!")
+        # Stats
+        col_stat1, col_stat2, col_stat3 = st.columns(3)
+        with col_stat1:
+            st.metric("Nodes", st.session_state.graph.number_of_nodes())
+        with col_stat2:
+            st.metric("Edges", st.session_state.graph.number_of_edges())
+        with col_stat3:
+            st.metric("Density", f"{nx.density(st.session_state.graph):.4f}")
 
-            if st.button("📄 Save PyVis (HTML)"):
-                path = save_pyvis_html(st.session_state.graph, name)
-                st.success(f"Saved HTML: {path}")
+        # =============================================
+        # EXPORT SECTION — Clean & Beautiful
+        # =============================================
+        st.divider()
+        st.markdown("### Export & Download")
 
-            if st.button("🖼️ Save as PNG"):
-                path = save_graph_png(st.session_state.graph, name)
-                st.success(f"Saved PNG: {path}")
-    st.markdown('</div>', unsafe_allow_html=True)
+        save_name = st.text_input(
+            "Export name",
+            value=f"KnowledgeGraph_{datetime.now().strftime('%b%d_%H%M')}",
+            key="export_name"
+        )
 
+        btn2, btn3 = st.columns(2)
+
+        with btn2:
+            if st.button("Interactive HTML", use_container_width=True):
+                path = save_pyvis_html(st.session_state.graph, save_name)
+                with open(path, "rb") as f:
+                    st.download_button(
+                        "Download HTML",
+                        data=f,
+                        file_name=path.name,
+                        mime="text/html",
+                        use_container_width=True
+                    )
+
+        with btn3:
+            if st.button("Static PNG", use_container_width=True):
+                path = save_graph_png(st.session_state.graph, save_name)
+                with open(path, "rb") as f:
+                    st.download_button(
+                        "Download PNG",
+                        data=f,
+                        file_name=path.name,
+                        mime="image/png",
+                        use_container_width=True
+                    )
 # ---------------------------
 # Tab 5: Semantic Search
 # Semantic Search Tab
@@ -1042,6 +1376,7 @@ with tab5:
                         st.session_state.semantic_engine = ss
                     
                     results = ss.search(query, top_k=top_k)
+                    st.session_state.has_done_semantic_search = True
                     st.session_state.search_results = results
                     
             except Exception as e:
