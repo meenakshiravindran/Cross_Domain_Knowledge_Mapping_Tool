@@ -1,12 +1,4 @@
 # Cross_Domain_Knowledge_Mapping_Tool
-
-Here is a **clean, professional, and impressive README** you can directly **copy–paste** into your GitHub repo.
-It is written specifically for your project **Cross Domain Knowledge Mapping Tool (Infosys Internship)** based on your workflow and milestones.
-
----
-
-# ✨ **Cross Domain Knowledge Mapping Tool**
-
 *A Project in AI & NLP Domain*
 
 ---
